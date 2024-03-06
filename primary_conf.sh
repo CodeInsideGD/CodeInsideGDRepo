@@ -29,17 +29,17 @@ command_check() {
   fi
 }
 
-# функция, которая запрашивает имя нового пользователя и проверяет его на наличие в системе
-#username_request() {
-#  while true; do
-#    read -r -p $'\n'"new username: " username
-#    if id "$username" >/dev/null 2>&1; then
-#      echo -e "\nUser $username exists!\n"
-#    else
-#      break
-#    fi
-#  done
-#}
+#функция, которая запрашивает имя нового пользователя и проверяет его на наличие в системе
+username_request() {
+ while true; do
+   read -r -p $'\n'"new username: " username
+   if id "$username" >/dev/null 2>&1; then
+     echo -e "\nUser $username exists!\n"
+   else
+     break
+   fi
+ done
+}
 
 # функция, которая проверяет наличие правила в iptables и в случае отсутствия применяет его
 iptables_add() {
@@ -75,57 +75,57 @@ if [ ! -f /etc/default/grub ]; then
   exit 1
 fi
 
-# # создадим нового пользователя
-# echo -e "\n====================\nNew user config\n===================="
+# создадим нового пользователя
+echo -e "\n====================\nNew user config\n===================="
 
-# while true; do
-#   read -r -n 1 -p "Continue or Skip? (c|s) " cs
-#   case $cs in
-#   [Cc]*)
-#     # запросим имя пользователя используя функцию username_request (функция создаст глобальную переменную "username")
-#     username_request
+while true; do
+  read -r -n 1 -p "Continue or Skip? (c|s) " cs
+  case $cs in
+  [Cc]*)
+    # запросим имя пользователя используя функцию username_request (функция создаст глобальную переменную "username")
+    username_request
 
-#     # запросим пароль для нового пользователя
-#     read -r -p "new password: " -s password
+    # запросим пароль для нового пользователя
+    read -r -p "new password: " -s password
 
-#     # создадим нового пользователя и перенесем ssh-ключи
-#     useradd -p "$(openssl passwd -1 "$password")" "$username" -s /bin/bash -m -G sudo
-#     cp -r /root/.ssh/ /home/"$username"/ && chown -R "$username":"$username" /home/"$username"/.ssh/
-#     echo -e "\n\nDONE\n"
+    # создадим нового пользователя и перенесем ssh-ключи
+    useradd -p "$(openssl passwd -1 "$password")" "$username" -s /bin/bash -m -G sudo
+    cp -r /root/.ssh/ /home/"$username"/ && chown -R "$username":"$username" /home/"$username"/.ssh/
+    echo -e "\n\nDONE\n"
 
-#     # выполним корректировку prompt statement
-#     echo -e "\n====================\nEdit prompt statement for this user?\n===================="
+    # выполним корректировку prompt statement
+    echo -e "\n====================\nEdit prompt statement for this user?\n===================="
 
-#     while true; do
-#       read -r -n 1 -p "Continue or Skip? (c|s) " cs
-#       case $cs in
-#       [Cc]*)
-#         # запросим имя vm
-#         read -r -p $'\n'"vm name: " vm_name
+    while true; do
+      read -r -n 1 -p "Continue or Skip? (c|s) " cs
+      case $cs in
+      [Cc]*)
+        # запросим имя vm
+        read -r -p $'\n'"vm name: " vm_name
 
-#         # выполним корректировку prompt statement
-#         echo "PS1='\${debian_chroot:+(\$debian_chroot)}\\u@$vm_name:\\w\\\$ '" >>/home/"$username"/.bashrc
+        # выполним корректировку prompt statement
+        echo "PS1='\${debian_chroot:+(\$debian_chroot)}\\u@$vm_name:\\w\\\$ '" >>/home/"$username"/.bashrc
 
-#         echo -e "\n\nDONE\n"
-#         break
-#         ;;
-#       [Ss]*)
-#         echo -e "\n"
-#         break
-#         ;;
-#       *) echo -e "\nPlease answer C or S!\n" ;;
-#       esac
-#     done
+        echo -e "\n\nDONE\n"
+        break
+        ;;
+      [Ss]*)
+        echo -e "\n"
+        break
+        ;;
+      *) echo -e "\nPlease answer C or S!\n" ;;
+      esac
+    done
 
-#     break
-#     ;;
-#   [Ss]*)
-#     echo -e "\n"
-#     break
-#     ;;
-#   *) echo -e "\nPlease answer C or S!\n" ;;
-#   esac
-# done
+    break
+    ;;
+  [Ss]*)
+    echo -e "\n"
+    break
+    ;;
+  *) echo -e "\nPlease answer C or S!\n" ;;
+  esac
+done
 
 
 # настроим ssh
