@@ -158,6 +158,17 @@ PRESETS: dict[str, Preset] = {
         compile_options=_compile_haproxy_options,
     ),
 
+    "nginx": Preset(
+        collector_type="nginx",
+        default_interval=30,
+        metric_aliases={
+            "service":         "nginx.service.running",
+            "config":          "nginx.config.valid",
+            "port":            "nginx.port.listening",
+            "upstream":        "nginx.upstream.status",
+        },
+    ),
+
     "xui": Preset(
         collector_type="xui",
         default_interval=30,

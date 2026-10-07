@@ -1,12 +1,7 @@
-# === Секреты и окружение ===
+# === Секреты ===
 .env
 .env.*
 !.env.example
-
-# === Виртуальное окружение ===
-.venv/
-venv/
-env/
 
 # === Python ===
 __pycache__/
@@ -21,22 +16,27 @@ dist/
 .mypy_cache/
 .ruff_cache/
 
+# === Virtualenv ===
+.venv/
+venv/
+env/
+
 # === Редакторы ===
 .vscode/
 .idea/
 *.swp
 *~
 
-# === ОС ===
+# === OS ===
 .DS_Store
 Thumbs.db
 
-# === Логи и данные ===
+# === Логи / данные ===
 *.log
 logs/
 *.sqlite
 *.db
 
-# === Локальные конфиги ===
-config.yaml.old
+# === Бэкапы ===
 *.bak
+config.yaml.old

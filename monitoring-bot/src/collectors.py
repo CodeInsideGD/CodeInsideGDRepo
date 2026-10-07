@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, csv, json, ssl, time, fnmatch
+import asyncio, csv, json, re, ssl, time, fnmatch
 from abc import ABC, abstractmethod
 from typing import Any
 import aiohttp, psutil
@@ -336,6 +336,186 @@ class HaproxyCollector(Collector):
         return out
 
 
+# ---------- nginx ----------
+@register
+class NginxCollector(Collector):
+    """Мониторинг nginx: статус сервиса, слушаемые порты, апстримы.
+
+    Работает в двух режимах:
+
+      1. Локальный nginx (по умолчанию):
+           check_cmd: ["systemctl", "is-active", "nginx"]
+           config_cmd: ["nginx", "-T"]
+
+      2. nginx в docker:
+           check_cmd: ["docker", "exec", "nginx", "pgrep", "-c", "nginx"]
+           config_cmd: ["docker", "exec", "nginx", "nginx", "-T"]
+
+    Сервис считается работающим, если check_cmd завершилась с кодом 0.
+    Конфиг читается через config_cmd, парсятся:
+      - listen-директивы → список (host, port) для TCP-проверки
+      - upstream-блоки → список (name, host:port) для TCP-проверки
+
+    Для каждого порта и каждого апстрима делается попытка TCP-connect.
+    Это отличает «есть в конфиге» от «реально работает».
+    """
+    type_name = "nginx"
+
+    # Regex для извлечения listen-адресов из вывода 'nginx -T'.
+    # Примеры: 'listen 80;', 'listen 443 ssl;', 'listen 127.0.0.1:8080;',
+    #          'listen [::]:80 ipv6only=on;', 'listen unix:/path/sock;'
+    _RE_LISTEN = re.compile(r"^\s*listen\s+([^;]+);", re.MULTILINE)
+    _RE_UPSTREAM_OPEN = re.compile(r"^\s*upstream\s+(\S+)\s*\{")
+    _RE_SERVER_LINE = re.compile(r"^\s*server\s+([^\s;]+)")
+
+    async def _run(self, cmd: list[str]) -> tuple[int, str, str]:
+        """Запускает команду, возвращает (returncode, stdout, stderr)."""
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate()
+        return (proc.returncode or 0,
+                out.decode(errors="replace"),
+                err.decode(errors="replace"))
+
+    async def _check_tcp(self, host: str, port: int,
+                         timeout: float = 2.0) -> bool:
+        """Проверяет TCP-доступность host:port."""
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=timeout,
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+    def _parse_listen(self, arg: str) -> tuple[str, int] | None:
+        """Разбирает аргумент listen-директивы.
+
+        '80'              → ('127.0.0.1', 80)
+        '443 ssl'         → ('127.0.0.1', 443)
+        '127.0.0.1:8080'  → ('127.0.0.1', 8080)
+        '[::]:80'         → ('::1', 80)
+        '[::1]:8080'      → ('::1', 8080)
+        'unix:/path'      → None
+        """
+        addr = arg.split()[0] if arg.split() else ""
+        if not addr or addr.startswith("unix:"):
+            return None
+
+        if addr.startswith("["):
+            idx = addr.find("]")
+            if idx < 0:
+                return None
+            host = addr[1:idx]
+            rest = addr[idx + 1:]
+            if not rest.startswith(":") or not rest[1:].isdigit():
+                return None
+            port = int(rest[1:])
+            if host in ("::", ""):
+                host = "::1"
+            return host, port
+
+        if ":" in addr:
+            host, port_str = addr.rsplit(":", 1)
+            if not port_str.isdigit():
+                return None
+            if host in ("0.0.0.0", ""):
+                host = "127.0.0.1"
+            return host, int(port_str)
+
+        if addr.isdigit():
+            return "127.0.0.1", int(addr)
+        return None
+
+    def _parse_upstreams(self, config: str) -> list[tuple[str, str]]:
+        """Возвращает список (upstream_name, 'host:port') из конфига.
+
+        Парсер построчный: отслеживает вход в блок 'upstream NAME {'
+        и выход по '}'. Внутри блока берёт строки 'server ...'.
+        """
+        result: list[tuple[str, str]] = []
+        current: str | None = None
+        for line in config.splitlines():
+            m = self._RE_UPSTREAM_OPEN.match(line)
+            if m:
+                current = m.group(1)
+                continue
+            if current is not None and line.strip() == "}":
+                current = None
+                continue
+            if current is not None:
+                m = self._RE_SERVER_LINE.match(line)
+                if m:
+                    addr = m.group(1)
+                    if addr.startswith("unix:"):
+                        continue
+                    result.append((current, addr))
+        return result
+
+    async def collect(self) -> list[Metric]:
+        o = self.options
+        check_cmd = o.get("check_cmd", ["systemctl", "is-active", "nginx"])
+        config_cmd = o.get("config_cmd", ["nginx", "-T"])
+        timeout = float(o.get("connect_timeout", 2.0))
+
+        out: list[Metric] = []
+
+        # --- 1. Статус сервиса ------------------------------------------------
+        rc, _, _ = await self._run(check_cmd)
+        service_running = 1.0 if rc == 0 else 0.0
+        out.append(Metric("nginx.service.running", service_running, self.name))
+
+        # --- 2. Читаем конфиг -------------------------------------------------
+        rc, cfg_out, cfg_err = await self._run(config_cmd)
+        config_valid = 1.0 if rc == 0 else 0.0
+        out.append(Metric("nginx.config.valid", config_valid, self.name))
+
+        if not config_valid:
+            # Конфиг битый — дальше парсить нечего.
+            return out
+
+        # --- 3. Слушаемые порты ----------------------------------------------
+        # Собираем уникальные (host, port) из всех listen-директив.
+        seen: set[tuple[str, int]] = set()
+        for m in self._RE_LISTEN.finditer(cfg_out):
+            parsed = self._parse_listen(m.group(1))
+            if parsed and parsed not in seen:
+                seen.add(parsed)
+
+        for host, port in sorted(seen):
+            alive = await self._check_tcp(host, port, timeout)
+            out.append(Metric(
+                "nginx.port.listening",
+                1.0 if alive else 0.0,
+                self.name,
+                {"host": host, "port": str(port)},
+            ))
+
+        # --- 4. Апстримы ------------------------------------------------------
+        for upname, server in self._parse_upstreams(cfg_out):
+            host, _, port_str = server.rpartition(":")
+            if not host or not port_str.isdigit():
+                continue
+            port = int(port_str)
+            if host in ("0.0.0.0", ""):
+                host = "127.0.0.1"
+            alive = await self._check_tcp(host, port, timeout)
+            out.append(Metric(
+                "nginx.upstream.status",
+                1.0 if alive else 0.0,
+                self.name,
+                {"upstream": upname, "server": server},
+            ))
+
+        return out
 # ---------- wireguard ----------
 @register
 class WireguardCollector(Collector):

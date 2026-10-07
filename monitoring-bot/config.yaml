@@ -150,3 +150,46 @@ targets:
         for: 60s
         severity: warning
         say: "Peer {peer} не отвечает {value:.0f}s"
+
+  # -------------------------------------------------------------------------
+  # Nginx
+  # -------------------------------------------------------------------------
+  # preset nginx — читает вывод 'nginx -T', парсит listen-директивы и
+  # upstream-блоки, проверяет TCP-доступность каждого порта и бэкенда.
+  #
+  # По умолчанию предполагается локальный nginx с systemd.
+  # Для nginx в docker используй:
+  #   check_cmd:  ["docker", "exec", "nginx", "pgrep", "-c", "nginx"]
+  #   config_cmd: ["docker", "exec", "nginx", "nginx", "-T"]
+  # -------------------------------------------------------------------------
+  - name: nginx
+    preset: nginx
+    interval: 30
+    rules:
+      - id: service-down
+        metric: service
+        below: 1
+        for: 30s
+        severity: critical
+        say: "Nginx не работает"
+
+      - id: config-invalid
+        metric: config
+        below: 1
+        for: 30s
+        severity: critical
+        say: "Nginx: конфиг невалиден"
+
+      - id: port-closed
+        metric: port
+        below: 1
+        for: 30s
+        severity: critical
+        say: "Nginx не слушает {host}:{port}"
+
+      - id: upstream-down
+        metric: upstream
+        below: 1
+        for: 30s
+        severity: warning
+        say: "Backend {upstream}/{server} недоступен"
