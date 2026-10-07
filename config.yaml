@@ -1,0 +1,152 @@
+# Конфигурация мониторинга.
+#
+# Каждый target — отдельный источник метрик. Формат target'а определяется
+# preset'ом: preset знает, какой коллектор использовать, какие дефолты
+# применить и как связать короткие имена метрик с полными.
+#
+# Секреты (токены, адреса сокетов) подставляются из .env через ${VAR}.
+#
+# Правила живут внутри своего target'а — связь «откуда метрика — когда
+# тревожиться» видна в одном месте. Итоговое имя правила: <target>.<id>.
+#
+# Условие собирается из above / below / equal. Метрика, на которую смотрит
+# правило, указывается в 'metric' — короткое имя из preset'а или полное
+# имя метрики. Ключ 'on' не используется: YAML 1.1 парсит его как bool.
+#
+# В шаблоне 'say' доступны: {value}, {value_h}, {source}, {name},
+# {labels}, а также любые лейблы метрики напрямую: {proxy}, {path},
+# {port}, {remark}, {peer} и т.д.
+
+targets:
+
+  # -------------------------------------------------------------------------
+  # Локальный хост
+  # -------------------------------------------------------------------------
+  - name: host
+    preset: system
+    interval: 10
+    disk: ["/"]
+    net: ["eth0"]
+    rules:
+      - id: cpu-high
+        metric: cpu
+        above: 90
+        for: 60s
+        severity: warning
+        say: "CPU {value:.1f}%"
+
+      - id: mem-high
+        metric: mem
+        above: 95
+        for: 2m
+        severity: critical
+        say: "RAM {value:.1f}%"
+
+      - id: disk-low
+        metric: disk_free
+        below: 5368709120
+        for: 5m
+        severity: warning
+        say: "Мало места на {path}: {value_h}"
+
+      - id: load-high
+        metric: load1
+        above: 8
+        for: 5m
+        severity: warning
+        say: "Load 1m: {value:.2f}"
+
+  # -------------------------------------------------------------------------
+  # Входной HAProxy
+  # -------------------------------------------------------------------------
+  - name: haproxy-in
+    preset: haproxy
+    interval: 10
+    socket: ${HAPROXY_IN_SOCK}
+    proxies: [xray_instances]
+    metrics:
+      - sessions
+      - queue
+      - traffic_in
+      - traffic_out
+      - errors_response
+      - errors_connection
+      - retries
+      - status
+    rules:
+      - id: backend-down
+        metric: status
+        below: 1
+        severity: critical
+        say: "Backend DOWN: {proxy} / {server}"
+
+      - id: queue-high
+        metric: queue
+        above: 10
+        for: 30s
+        severity: warning
+        say: "Очередь {proxy} / {server}: {value}"
+
+  # -------------------------------------------------------------------------
+  # Выходной HAProxy
+  # -------------------------------------------------------------------------
+  - name: haproxy-out
+    preset: haproxy
+    interval: 10
+    socket: ${HAPROXY_OUT_SOCK}
+    metrics:
+      - sessions
+      - traffic_in
+      - traffic_out
+      - status
+    rules:
+      - id: backend-down
+        metric: status
+        below: 1
+        severity: critical
+        say: "Backend DOWN: {proxy} / {server}"
+
+  # -------------------------------------------------------------------------
+  # 3x-ui
+  # -------------------------------------------------------------------------
+  # paths указывает пресету, по каким URL тянуть server_status и inbounds.
+  # Если у тебя /panel/server/status отдаёт 404 — попробуй /server/status
+  # или /panel/api/server/status. Если ни один не работает, убери
+  # server_status из include и правило xray-down.
+  # -------------------------------------------------------------------------
+  - name: xui
+    preset: xui
+    interval: 30
+    url: ${XUI_URL}
+    token: ${XUI_API_TOKEN}
+    paths:
+      server_status: /panel/api/server/status
+      inbounds:      /panel/api/inbounds/list
+    rules:
+      - id: xray-down
+        metric: xray_running
+        below: 1
+        for: 30s
+        severity: critical
+        say: "Xray на панели не работает"
+
+      - id: inbound-off
+        metric: inbound.enable
+        below: 1
+        for: 2m
+        severity: warning
+        say: "Inbound «{remark}» (порт {port}) выключен"
+
+  # -------------------------------------------------------------------------
+  # WireGuard
+  # -------------------------------------------------------------------------
+  - name: wg
+    preset: wireguard
+    interval: 30
+    rules:
+      - id: stale-peer
+        metric: handshake
+        above: 300
+        for: 60s
+        severity: warning
+        say: "Peer {peer} не отвечает {value:.0f}s"
